@@ -24,6 +24,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "awsRegion": "us-east-1",
+      "cogUserPoolId": "us-east-1_j97WB8yxl",
+      "cogAppClientId": "2uod5sarqkrg8b713ffb2mtoql",
+      "apiBaseUrl": "https://pd448cmwpf.execute-api.us-east-1.amazonaws.com/dev"
     }
   }
 }

@@ -1,53 +1,44 @@
-import { useState } from "react";
-import { auth } from "./firebaseConfig";
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import axios from "axios";
+import React, { useState } from "react";
+import { useAuth } from "./AuthProvider";
+import Login from "./loginPage/Login";
+import Signup from "./loginPage/Signup";
+import Confirm from "./loginPage/Confirm";
+import Home from "./pages/Home";
 
-function App() {
-  const [email,setEmail] = useState("");
-  const [pw,setPw]     = useState("");
-  const [msg,setMsg]   = useState("");
+export default function App() {
+  const { user, loading, signUp, confirmSignUp, signIn } = useAuth();
+  const [authStage, setAuthStage] = useState("login");
+  const [signupEmail, setSignupEmail] = useState("");
 
-  const handleSignup = async () => {
-    try {
-      await createUserWithEmailAndPassword(auth, email, pw);
-      setMsg("Signed up! Now please log in.");
-    } catch (e) {
-      setMsg(e.message);
-    }
+  if (loading) return <div>Loading...</div>;
+
+  // Handlers (as before)
+  const handleSignup = async (email, pw, name) => {
+    await signUp(email, pw, name);
+    setSignupEmail(email);
+    setAuthStage("confirm");
+  };
+  const handleConfirm = async (email, code) => {
+    await confirmSignUp(email, code);
+    setAuthStage("login");
+  };
+  const handleLogin = async (email, pw) => {
+    await signIn(email, pw);
   };
 
-  const handleLogin = async () => {
-    try {
-      const { user } = await signInWithEmailAndPassword(auth, email, pw);
-      const token = await user.getIdToken();
-      const res = await axios.get("http://localhost:8000/protected", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setMsg(res.data.message);
-    } catch (e) {
-      setMsg(e.response?.data?.detail || e.message);
-    }
-  };
-
-  return (
-    <div style={{ maxWidth: 400, margin: "2rem auto" }}>
-      <h2>Triagely MVP Auth Test</h2>
-      <input
-        type="email" placeholder="Email"
-        value={email} onChange={e=>setEmail(e.target.value)}
-        style={{width:"100%",padding:8,marginBottom:8}}
-      />
-      <input
-        type="password" placeholder="Password"
-        value={pw} onChange={e=>setPw(e.target.value)}
-        style={{width:"100%",padding:8,marginBottom:8}}
-      />
-      <button onClick={handleSignup} style={{marginRight:8}}>Sign Up</button>
-      <button onClick={handleLogin}>Log In & Call API</button>
-      <p>{msg}</p>
-    </div>
-  );
+  // ---- Main render:
+  if (!user) {
+    // Show login/signup/confirm
+    if (authStage === "login")
+      return <Login onLogin={handleLogin} switchToSignup={() => setAuthStage("signup")} />;
+    if (authStage === "signup")
+      return <Signup onSignup={handleSignup} switchToLogin={() => setAuthStage("login")} />;
+    if (authStage === "confirm")
+      return <Confirm email={signupEmail} onConfirm={handleConfirm} switchToLogin={() => setAuthStage("login")} />;
+    return null;
+  } else {
+    // Authenticated: show main app
+    return <Home />;
+  }
 }
-
-export default App;
+ 

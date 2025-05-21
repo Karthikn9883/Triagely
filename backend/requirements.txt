@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+boto3
+requests
+python-jose[cryptography]
+google-auth-oauthlib==1.1.0
+google-api-python-client==2.129.0
+slack-sdk==3.27.0

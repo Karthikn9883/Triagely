@@ -1,0 +1,30 @@
+/* src/pages/Home.module.css */
+.homeRoot {
+  display: flex;
+  height: 100vh;
+  background: #f8f9fb;
+  font-family: 'Inter', sans-serif;
+}
+.mainPane {
+  flex: 2;
+  border-right: 1px solid #ededed;
+  min-width: 320px;
+  background: #fff;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.detailPane {
+  flex: 3;
+  min-width: 400px;
+  background: #fafbfc;
+  overflow-y: auto;
+  box-shadow: -3px 0 6px -3px #f0f0f0;
+}
+.inboxTitle {
+  font-size: 1.25em;
+  font-weight: bold;
+  color: #3b2ca8;
+  margin: 24px 0 0 26px;
+  letter-spacing: 0.02em;
+}

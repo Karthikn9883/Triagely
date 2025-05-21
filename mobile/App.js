@@ -1,62 +1,49 @@
-// mobile/App.js
 import React, { useState } from "react";
 import { TextInput, Button, Text, View, StyleSheet } from "react-native";
-import { initializeApp } from "firebase/app";
-import {
-  initializeAuth,
-  getReactNativePersistence,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-} from "firebase/auth";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Amplify, Auth } from "aws-amplify";
+import config from "./src/aws-exports";
 import axios from "axios";
 import Constants from "expo-constants";
 
-// initialize Firebase
-const firebaseConfig = {
-  apiKey: "AIzaSyAtX-2ZmuRC6eDapi2WkYtR7kF-vSf_BAw",
-  authDomain: "triagely-c4f38.firebaseapp.com",
-  projectId: "triagely-c4f38",
-  storageBucket: "triagely-c4f38.firebasestorage.app",
-  messagingSenderId: "462011870278",
-  appId: "1:462011870278:web:029a5396c60877c79e2e47",
-  measurementId: "G-L9DZWQD0KM"
-};
-const app = initializeApp(firebaseConfig);
-const auth = initializeAuth(app, {
-  persistence: getReactNativePersistence(AsyncStorage),
-});
+// Config loaded via amplifyConfig.js
 
 export default function App() {
-  const [email,setEmail] = useState("");
-  const [pw,setPw]     = useState("");
-  const [msg,setMsg]   = useState("");
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [msg, setMsg] = useState("");
 
   const handleSignup = async () => {
     try {
-      await createUserWithEmailAndPassword(auth, email, pw);
-      setMsg("Signed up! Now log in.");
+      await Auth.signUp({
+        username: email,
+        password: pw,
+        attributes: { email },
+      });
+      setMsg("Signed up! Check your email to verify, then log in.");
     } catch (e) {
-      setMsg(e.message);
+      setMsg(e.message || JSON.stringify(e));
     }
   };
 
   const handleLogin = async () => {
     try {
-      const { user } = await signInWithEmailAndPassword(auth, email, pw);
-      const token = await user.getIdToken();
-      const res = await axios.get("http://10.0.0.2:8000/protected", {
+      await Auth.signIn(email, pw);
+      const session = await Auth.currentSession();
+      const token = session.getIdToken().getJwtToken();
+      // Get API base URL from app.json > extra
+      const apiBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl || "http://10.0.0.2:8000";
+      const res = await axios.get(`${apiBaseUrl}/protected`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setMsg(res.data.message);
     } catch (e) {
-      setMsg(e.response?.data?.detail || e.message);
+      setMsg(e.message || JSON.stringify(e));
     }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Triagely Mobile Auth</Text>
+      <Text style={styles.title}>Triagely Mobile Auth (Cognito)</Text>
       <TextInput
         style={styles.input}
         placeholder="Email" value={email}
@@ -78,9 +65,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex:1, justifyContent:"center", padding:20 },
-  title: { fontSize:24, textAlign:"center", marginBottom:20 },
-  input: { borderWidth:1, padding:8, marginBottom:12, borderRadius:4 },
-  buttons: { flexDirection:"row", justifyContent:"space-between", marginBottom:12 },
-  msg: { textAlign:"center", marginTop:12 }
+  container: { flex: 1, justifyContent: "center", padding: 20 },
+  title: { fontSize: 24, textAlign: "center", marginBottom: 20 },
+  input: { borderWidth: 1, padding: 8, marginBottom: 12, borderRadius: 4 },
+  buttons: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+  msg: { textAlign: "center", marginTop: 12 }
 });
