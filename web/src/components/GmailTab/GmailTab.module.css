@@ -1,0 +1,38 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.row, .rowSel {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+}
+
+.row:hover            { background: #faf8ff; }
+.rowSel               { background: #f1e9ff; border-left: 3px solid #7a3cff; }
+
+.cellLeft   { max-width: 72%; }
+.sender     { font-weight: 600; color: #333; }
+.preview    { font-size: .92rem; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snip       { font-size: .86rem; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.date       { white-space: nowrap; color: #777; font-size: .85rem; }
+
+.urgentChip {
+  background: #ffebe7;
+  color: #d23426;
+  font-size: .78rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+.placeholder, .error {
+  padding: 32px;
+  color: #999;
+}
+.error { color: #d33; }

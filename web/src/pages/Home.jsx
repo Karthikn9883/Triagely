@@ -1,41 +1,27 @@
+// src/pages/Home.jsx
 import React, { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar/Sidebar";
-import MessageList from "../components/MessageList/MessageList";
+import GmailTab from "../components/GmailTab/GmailTab";
 import MessageDetail from "../components/MessageDetail/MessageDetail";
 import { useAuth } from "../AuthProvider";
 import styles from "./Home.module.css";
-import axios from "axios";
 
 export default function Home() {
-  const { getIdToken, signOut } = useAuth();
-
-  const [messages, setMessages] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { signOut } = useAuth();
   const [sidebarTab, setSidebarTab] = useState("Priority");
-  const [error, setError] = useState(null);
+  const [selected, setSelected]     = useState(null);
 
-  // Fetch messages from backend
+  // clear selection when tab changes
+  useEffect(() => { setSelected(null); }, [sidebarTab]);
+
+  // Post-OAuth hook (unchanged)
   useEffect(() => {
-    async function fetchMessages() {
-      try {
-        setLoading(true);
-        setError(null);
-        const idToken = await getIdToken();
-        const res = await axios.get(
-          `${process.env.REACT_APP_API_BASE_URL}/messages`,
-          { headers: { Authorization: `Bearer ${idToken}` } }
-        );
-        setMessages(res.data);
-        setSelected(res.data[0] || null);
-      } catch (err) {
-        setError(err.response?.data?.detail || err.message);
-      } finally {
-        setLoading(false);
-      }
+    const p = new URLSearchParams(window.location.search).get("provider");
+    if (p) {
+      alert(`Connected ${p}!`);
+      window.history.replaceState({}, "", window.location.pathname);
     }
-    fetchMessages();
-  }, [getIdToken]);
+  }, []);
 
   return (
     <div className={styles.homeRoot}>
@@ -53,35 +39,33 @@ export default function Home() {
       >
         Logout
       </button>
+
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={setSidebarTab}
-        connectedAccounts={[
-          { email: "work@example.com", type: "gmail" },
-          { email: "Marketing Team", type: "slack" },
-        ]}
+        connectedAccounts={[] /* you'll fill this from state later */}
       />
+
       <main className={styles.mainPane}>
         <h2 className={styles.inboxTitle}>
           {sidebarTab === "Priority" ? "Priority Inbox" : sidebarTab}
         </h2>
-        {loading && <div style={{ padding: 32 }}>Loading...</div>}
-        {error && <div style={{ color: "red", padding: 32 }}>{error}</div>}
-        {!loading && !error && (
-          <MessageList
-            messages={messages}
-            selected={selected}
-            setSelected={setSelected}
-          />
+
+        {sidebarTab === "Gmail" ? (
+          <GmailTab selected={selected} setSelected={setSelected} />
+        ) : (
+          <div className={styles.placeholder}>
+            {/* you can render your other tabs here */}
+            Select a tab
+          </div>
         )}
       </main>
+
       <aside className={styles.detailPane}>
         {selected ? (
           <MessageDetail message={selected} />
         ) : (
-          <div style={{ padding: 32, color: "#999" }}>
-            Select a message…
-          </div>
+          <div className={styles.placeholder}>Select a message…</div>
         )}
       </aside>
     </div>

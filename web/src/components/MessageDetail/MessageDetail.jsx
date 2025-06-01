@@ -1,48 +1,74 @@
 import React from "react";
-import AISummaryBox from "../AISummary/AISummaryBox";
+import DOMPurify from "dompurify";
 import styles from "./MessageDetail.module.css";
 
 export default function MessageDetail({ message }) {
   if (!message) return null;
+
+  // Format date/time
+  const when = message.dateISO
+    ? new Date(message.dateISO).toLocaleString()
+    : "";
+
+  // Extract sender name/email
+  let name = "";
+  let email = "";
+  if (message.sender) {
+    const match = message.sender.match(/(.*)<(.*)>/);
+    if (match) {
+      name = match[1].trim();
+      email = match[2].trim();
+    } else {
+      name = message.sender.trim();
+    }
+  }
+
   return (
-    <div className={styles.detailRoot}>
-      <div className={styles.subjectRow}>
-        <span className={styles.urgentTag}>{message.urgent && "Urgent"}</span>
-        <span className={styles.subject}>{message.subject}</span>
-        <span className={styles.sourceTag}>
-          {message.source === "gmail" ? "Gmail" : "Slack"}
-        </span>
-        <span className={styles.time}>{formatTime(message.time)}</span>
+    <article className={styles.root}>
+      {/* ── Header */}
+      <header className={styles.head}>
+        <h1 className={styles.subject}>{message.subject}</h1>
+        <span className={styles.pill}>Gmail</span>
+        <span className={styles.date}>{when}</span>
+      </header>
+
+      {/* ── AI Box */}
+      <section className={styles.aiBox}>
+        <div className={styles.aiTitle}>AI Summary & Action Items</div>
+        {message.aiSummary?.length > 0 ? (
+          <ul className={styles.checkList}>
+            {message.aiSummary.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ul>
+        ) : (
+          <em>No summary yet</em>
+        )}
+      </section>
+
+      {/* ── Sender info */}
+      <div className={styles.senderLine}>
+        <strong>{name}</strong>
+        {email && <span className={styles.senderEmail}>{email}</span>}
       </div>
-      <AISummaryBox summary={message.aiSummary} checklist={message.aiChecklist} />
-      <div className={styles.bodySection}>
-        <div className={styles.senderInfo}>
-          <b>{message.sender}</b>
-          <span style={{ marginLeft: 8, color: "#aaa" }}>
-            {message.source === "gmail"
-              ? message.senderEmail || ""
-              : message.channel || ""}
-          </span>
-        </div>
-        <pre className={styles.messageBody}>{message.content}</pre>
-      </div>
-      <div className={styles.prevExchanges}>
-        {message.prev?.map((p, i) => (
-          <div key={i} className={styles.prevRow}>
-            <b>{p.date}</b> – {p.summary}
-          </div>
-        ))}
-      </div>
-      <div className={styles.quickReply}>
-        <input type="text" placeholder="Type your response…" />
+
+      {/* ── Body */}
+      {message.html ? (
+        <div
+          className={styles.bodyHtml}
+          dangerouslySetInnerHTML={{
+            __html: DOMPurify.sanitize(message.html),
+          }}
+        />
+      ) : (
+        <pre className={styles.bodyPlain}>{message.plain}</pre>
+      )}
+
+      {/* ── Quick reply */}
+      <div className={styles.replyRow}>
+        <input placeholder="Type your response…" />
         <button>Send</button>
       </div>
-    </div>
+    </article>
   );
-}
-
-function formatTime(isoString) {
-  if (!isoString) return "";
-  const d = new Date(isoString);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }

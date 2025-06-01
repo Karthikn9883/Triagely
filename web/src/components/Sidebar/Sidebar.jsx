@@ -1,6 +1,8 @@
 import React from "react";
 import styles from "./Sidebar.module.css";
 import { FaInbox, FaSlack, FaGoogle, FaTasks, FaBell } from "react-icons/fa";
+import ConnectGmailButton from "../AccountConnect/ConnectGmailButton";
+import ConnectSlackButton from "../AccountConnect/ConnectSlackButton";
 
 export default function Sidebar({ activeTab, setActiveTab, connectedAccounts }) {
   const navItems = [
@@ -18,7 +20,13 @@ export default function Sidebar({ activeTab, setActiveTab, connectedAccounts }) 
         <span className={styles.logoText}>Triagely</span>
       </div>
       <input className={styles.search} type="text" placeholder="Search messages…" />
-      <button className={styles.connectBtn}>+ Connect Account</button>
+
+      {/* --- Connect buttons here --- */}
+      <div style={{ margin: "18px 0 10px 20px" }}>
+        <ConnectGmailButton />
+        <ConnectSlackButton />
+      </div>
+
       <ul className={styles.navList}>
         {navItems.map(item => (
           <li
