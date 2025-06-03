@@ -1,3 +1,6 @@
+// src/components/MessageDetail/MessageDetail.jsx
+// (make sure you have `dompurify` installed:  `npm install dompurify`)
+// 
 import React from "react";
 import DOMPurify from "dompurify";
 import styles from "./MessageDetail.module.css";
@@ -5,37 +8,39 @@ import styles from "./MessageDetail.module.css";
 export default function MessageDetail({ message }) {
   if (!message) return null;
 
-  // Format date/time
+  // Format date + time:
   const when = message.dateISO
-    ? new Date(message.dateISO).toLocaleString()
+    ? new Date(message.dateISO).toLocaleString(undefined, {
+        month: "short",
+        day:   "numeric",
+        year:  "numeric",
+        hour:  "2-digit",
+        minute:"2-digit",
+      })
     : "";
 
-  // Extract sender name/email
-  let name = "";
-  let email = "";
-  if (message.sender) {
-    const match = message.sender.match(/(.*)<(.*)>/);
-    if (match) {
-      name = match[1].trim();
-      email = match[2].trim();
-    } else {
-      name = message.sender.trim();
-    }
-  }
+  // Extract “From” name vs email
+  const rawFrom = message.sender || "";
+  const namePart = rawFrom.includes("<")
+    ? rawFrom.split("<")[0].trim()
+    : rawFrom;
+  const emailPart = rawFrom.includes("<")
+    ? rawFrom.match(/<([^>]+)>/)?.[1] ?? ""
+    : "";
 
   return (
     <article className={styles.root}>
-      {/* ── Header */}
+      {/* ── Header (Subject + Gmail pill + date) ─────────────────────────── */}
       <header className={styles.head}>
-        <h1 className={styles.subject}>{message.subject}</h1>
+        <h1 className={styles.subject}>{message.subject || "(No subject)"}</h1>
         <span className={styles.pill}>Gmail</span>
         <span className={styles.date}>{when}</span>
       </header>
 
-      {/* ── AI Box */}
+      {/* ── AI Box ────────────────────────────────────────────────────────── */}
       <section className={styles.aiBox}>
         <div className={styles.aiTitle}>AI Summary & Action Items</div>
-        {message.aiSummary?.length > 0 ? (
+        {message.aiSummary && message.aiSummary.length > 0 ? (
           <ul className={styles.checkList}>
             {message.aiSummary.map((s, i) => (
               <li key={i}>{s}</li>
@@ -46,16 +51,17 @@ export default function MessageDetail({ message }) {
         )}
       </section>
 
-      {/* ── Sender info */}
+      {/* ── From line ────────────────────────────────────────────────────── */}
       <div className={styles.senderLine}>
-        <strong>{name}</strong>
-        {email && <span className={styles.senderEmail}>{email}</span>}
+        <strong>{namePart || "Unknown Sender"}</strong>
+        {emailPart && <span className={styles.senderEmail}>{emailPart}</span>}
       </div>
 
-      {/* ── Body */}
+      {/* ── Body: HTML or plain text ─────────────────────────────────────── */}
       {message.html ? (
         <div
           className={styles.bodyHtml}
+          // sanitize before dangerously setting innerHTML
           dangerouslySetInnerHTML={{
             __html: DOMPurify.sanitize(message.html),
           }}
@@ -64,7 +70,7 @@ export default function MessageDetail({ message }) {
         <pre className={styles.bodyPlain}>{message.plain}</pre>
       )}
 
-      {/* ── Quick reply */}
+      {/* ── Quick reply stays if you still want it ────────────────────────── */}
       <div className={styles.replyRow}>
         <input placeholder="Type your response…" />
         <button>Send</button>

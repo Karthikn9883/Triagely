@@ -10,19 +10,33 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  /* ─────────────────────────────────────────────
+     1️⃣  On page load, find existing Cognito user
+  ────────────────────────────────────────────────*/
   useEffect(() => {
     Auth.currentAuthenticatedUser()
-      .then(setUser)
+      .then(cogUser => {
+        if (!cogUser) return setUser(null);
+        /* ← ✅ Inject a username prop. */
+        const uName =
+          cogUser.attributes?.name ||
+          cogUser.attributes?.preferred_username ||
+          cogUser.username ||
+          cogUser.attributes?.email?.split("@")[0];
+        setUser({ ...cogUser, username: uName });
+      })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
 
-  // <--- accepts name attribute!
+  /* ─────────────────────────────────────────────
+     The sign-up / confirm helpers are unchanged
+  ────────────────────────────────────────────────*/
   const signUp = async (email, password, name) => {
     await Auth.signUp({
       username: email,
       password,
-      attributes: { email, name },
+      attributes: { email, name },   // you already capture “name”
     });
   };
 
@@ -30,10 +44,18 @@ export function AuthProvider({ children }) {
     await Auth.confirmSignUp(email, code);
   };
 
+  /* ─────────────────────────────────────────────
+     2️⃣  On sign-in, attach the username again
+  ────────────────────────────────────────────────*/
   const signIn = async (email, password) => {
-    const user = await Auth.signIn(email, password);
-    setUser(user);
-    return user;
+    const cogUser = await Auth.signIn(email, password);
+    const uName =
+      cogUser.attributes?.name ||
+      cogUser.attributes?.preferred_username ||
+      cogUser.username ||
+      cogUser.attributes?.email?.split("@")[0];
+    setUser({ ...cogUser, username: uName });   /* ← ✅ */
+    return cogUser;
   };
 
   const signOut = async () => {

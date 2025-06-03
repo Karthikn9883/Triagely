@@ -105,3 +105,27 @@
   display: flex;
   align-items: center;
 }
+
+
+/* add near the bottom of the file */
+.flexSpacer {
+  flex: 1;             /* pushes the logout row down */
+}
+
+.logoutRow {
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  font-size: 1.05em;
+  cursor: pointer;
+  color: #5b4be1;
+  border-top: 1px solid #e4e0f6;
+  transition: background 0.12s;
+}
+.logoutRow:hover {
+  background: #efeaff;
+}

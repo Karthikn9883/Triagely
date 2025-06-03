@@ -7,7 +7,7 @@ import { useAuth } from "../AuthProvider";
 import styles from "./Home.module.css";
 
 export default function Home() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const [sidebarTab, setSidebarTab] = useState("Priority");
   const [selected, setSelected]     = useState(null);
 
@@ -25,25 +25,13 @@ export default function Home() {
 
   return (
     <div className={styles.homeRoot}>
-      <button
-        onClick={signOut}
-        style={{
-          position: "absolute",
-          top: 18,
-          right: 22,
-          padding: 8,
-          borderRadius: 7,
-          background: "#eee",
-          color: "#6843be",
-        }}
-      >
-        Logout
-      </button>
 
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={setSidebarTab}
         connectedAccounts={[] /* you'll fill this from state later */}
+        onLogout={signOut}
+        userName={user?.username || "User"}
       />
 
       <main className={styles.mainPane}>

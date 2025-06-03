@@ -23,6 +23,7 @@ def get_token(uid: str, provider: str) -> dict | None:
 
 # ---- Messages --------------------------------------------------------------
 def put_msg(uid: str, msg_id: str, source: str, body: dict):
+    
     t_msg.put_item(Item={"UserID": uid, "MessageID": msg_id, "Source": source, **body})
 
 def list_msgs(uid: str, limit=50):

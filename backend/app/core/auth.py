@@ -26,9 +26,34 @@ def verify(token: str) -> dict:
     try:
         kid = jwt.get_unverified_header(token)["kid"]
         key = next(k for k in _jwks() if k["kid"] == kid)
-        return jwt.decode(token, key, algorithms=["RS256"], audience=CLIENT_ID, issuer=_ISSUER)
+
+        claims: dict = jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
+            issuer=_ISSUER,
+        )
+
+        # ▸▸▸ Normalise the user’s “username” so the frontend
+        # can rely on claims['username'] always existing.
+        username = (
+            claims.get("custom:username")               # if you stored it as a custom attribute
+            or claims.get("preferred_username")
+            or claims.get("cognito:username")
+            or claims.get("username")
+            or claims.get("name")
+            or claims.get("email", "").split("@")[0]    # fallback: left-hand side of the email
+        )
+        claims["username"] = username
+
+        return claims
+
     except (StopIteration, JWTError):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid/expired token")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Invalid or expired token",
+        )
 
 security = HTTPBearer()
 
