@@ -1,39 +1,46 @@
-# app/integrations/gmail/router.py
-# ─────────────────────────────────────────────────────────────
 """
-Routes for Gmail OAuth 2.0  +  listing / refreshing cached Gmail threads
+Gmail OAuth 2.0, cache-sync, and list-view (multi-account).
+
+Endpoints
+=========
+
+GET  /gmail/connect     → Google consent URL  
+GET  /gmail/callback    → stores token under  gmail:<addr>  
+POST /gmail/fetch       → pulls newest threads for *all* Gmail accounts  
+GET  /gmail/messages    → merged cached view (for React list)  
+GET  /gmail/accounts    → list of addresses  ["me@x", "other@y"]
 """
 from __future__ import annotations
 
-import json
-import os
+import json, os
 from email.utils import parsedate_to_datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
 
-from app.core.auth    import current_user
-from app.core.db      import list_msgs, save_token
+from app.core.auth import current_user
+from app.core.db   import (
+    list_msgs,
+    save_token,
+    list_gmail_tokens,
+)
 from app.core.secrets import get as get_secret
-
-from . import service                         # <-- our fetcher / saver
+from . import service
 from .schemas import GmailMessage
 
 router = APIRouter(prefix="/gmail", tags=["gmail"])
 
-# ───────────────────────────────
-# Config
-# ───────────────────────────────
-SECRET  = get_secret("gmail-oauth")
-SCOPES  = os.getenv(
+# ───────────────────────── configuration ─────────────────────────
+SECRET = get_secret("gmail-oauth")
+SCOPES = os.getenv(
     "GMAIL_SCOPES", "https://www.googleapis.com/auth/gmail.readonly"
 ).split(",")
 
 
 def _detect_redirect() -> str:
-    # env-override → docker variables → localhost
     if (uri := os.getenv("GMAIL_REDIRECT_URL")):
         return uri.rstrip("/")
     host = os.getenv("API_HOST", "localhost")
@@ -61,13 +68,11 @@ def _flow(state: str | None):
     )
 
 
-def _hdrs_to_dict(l: list[dict]) -> dict[str, str]:
-    return {h["name"].lower(): h["value"] for h in l}
+def _hdrs_to_dict(h: list[dict]) -> dict[str, str]:
+    return {i["name"].lower(): i["value"] for i in h}
 
 
-# ───────────────────────────────
-# OAuth  endpoints
-# ───────────────────────────────
+# ───────────────────────── OAuth endpoints ───────────────────────
 @router.get("/connect")
 async def connect(user=Depends(current_user)):
     auth_url, _ = _flow(user["sub"]).authorization_url(
@@ -81,10 +86,10 @@ async def connect(user=Depends(current_user)):
 @router.get("/callback")
 async def callback(request: Request, state: str = "", code: str = ""):
     """
-    1. Exchange auth-code for refresh / access tokens  
-    2. Persist tokens (triagely-oauth)  
-    3. Immediately call `service.fetch_for_user` so the very first batch of
-       threads lands in triagely-messages **before** we redirect the SPA.
+    • Exchange auth-code → tokens  
+    • Discover the Gmail address just authorised  
+    • Store tokens keyed by ``gmail:<addr>``  
+    • Prime the cache so the UI has data instantly
     """
     flow = _flow(state)
     try:
@@ -93,9 +98,20 @@ async def callback(request: Request, state: str = "", code: str = ""):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Token exchange failed: {exc}")
 
     creds = flow.credentials
+
+    # —— determine the primary Gmail address ————————————————
+    email_addr = None
+    try:
+        gsvc = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        email_addr = gsvc.users().getProfile(userId="me").execute().get("emailAddress")
+    except Exception:
+        pass
+
+    provider_key = f"gmail:{email_addr}" if email_addr else "gmail"
+
     save_token(
         state,
-        "gmail",
+        provider_key,
         {
             "refresh_token": creds.refresh_token,
             "access_token":  creds.token,
@@ -104,61 +120,55 @@ async def callback(request: Request, state: str = "", code: str = ""):
             "client_id":     SECRET["client_id"],
             "client_secret": SECRET["client_secret"],
             "scopes":        creds.scopes,
+            "email":         email_addr,
         },
     )
 
-    # ⭐ NEW: prime the cache so UI has data right away
-    fetched = service.fetch_for_user(state, max_threads=30)
-    print(f"[gmail/callback] Cached {len(fetched)} threads for user {state}")
+    # —— prime the cache for *all* Gmail accounts of this user ————
+    service.fetch_for_user(state, max_threads=40)
 
-    frontend = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    return RedirectResponse(f"{frontend.rstrip('/')}/connected?provider=gmail")
+    fe = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(f"{fe.rstrip('/')}/connected?provider=gmail")
 
 
-# ───────────────────────────────
-# Manual refresh  (used by “Refresh” button)
-# ───────────────────────────────
+# ───────────────────────── manual refresh (Refresh-btn) ───────────
 @router.post("/fetch")
-async def fetch_now(limit: int | None = 25, user=Depends(current_user)):
-    fetched = service.fetch_for_user(user["sub"], max_threads=limit or 25)
-    cached  = len(list_msgs(user["sub"], limit or 100))
-    return {"fetched": len(fetched), "cached": cached}
+async def fetch_now(limit: int | None = 30, user=Depends(current_user)):
+    """
+    Hit Google for each connected account, store unseen threads,
+    return the number of genuinely-new rows inserted.
+    """
+    new_threads = service.fetch_for_user(user["sub"], max_threads=limit or 30)
+    return {"fetched": len(new_threads)}
 
 
-# ───────────────────────────────
-# List cached threads for the SPA
-# ───────────────────────────────
+# ───────────────────────── cached list view ───────────────────────
 @router.get("/messages", response_model=List[GmailMessage])
 async def list_messages(limit: int = 50, user=Depends(current_user)):
-    raw_items = list_msgs(user["sub"], limit)
+    raw = list_msgs(user["sub"], limit)
     out: list[GmailMessage] = []
 
-    for itm in raw_items:
+    for itm in raw:
         subject  = itm.get("subject") or "(No subject)"
         sender   = itm.get("sender", "")
         date_iso = itm.get("dateISO")
-        snippet  = itm.get("snippet", "")
 
-        # fill gaps from raw JSON (if stored by previous versions)
-        if not (sender and date_iso):
+        if not (sender and date_iso):                       # repair legacy rows
             try:
                 thread = json.loads(itm.get("raw", "{}"))
                 first  = (thread.get("messages") or thread.get("payload") or [])[0]
                 hdrs   = _hdrs_to_dict(first.get("payload", {}).get("headers", []))
-                sender   = sender   or hdrs.get("from", sender)
-                subject  = subject  or hdrs.get("subject", subject)
+                sender  = sender  or hdrs.get("from", sender)
+                subject = subject or hdrs.get("subject", subject)
                 if not date_iso and (d := hdrs.get("date")):
-                    try:
-                        date_iso = parsedate_to_datetime(d).isoformat()
-                    except Exception:
-                        pass
+                    date_iso = parsedate_to_datetime(d).isoformat()
             except Exception:
                 pass
 
         out.append(
             GmailMessage(
                 MessageID   = itm["MessageID"],
-                snippet     = snippet,
+                snippet     = itm.get("snippet", ""),
                 subject     = subject,
                 sender      = sender,
                 senderEmail = sender.split("<")[-1].strip("> ") if "<" in sender else sender,
@@ -173,3 +183,18 @@ async def list_messages(limit: int = 50, user=Depends(current_user)):
 
     out.sort(key=lambda m: m.dateISO or "", reverse=True)
     return out
+
+
+# ───────────────────────── sidebar helper ─────────────────────────
+@router.get("/accounts")
+async def list_accounts(user=Depends(current_user)):
+    """
+    Return every Gmail address the user attached – uses cached values
+    stored in triagely-oauth.
+    """
+    addrs: list[str] = []
+    for tok in list_gmail_tokens(user["sub"]):
+        data = json.loads(tok["token"])
+        if data.get("email"):
+            addrs.append(data["email"])
+    return addrs

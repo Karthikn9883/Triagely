@@ -129,3 +129,23 @@
 .logoutRow:hover {
   background: #efeaff;
 }
+.chevronClosed {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.chevronOpen {
+  margin-left: auto;
+  transform: rotate(180deg);
+  transition: transform 0.15s;
+}
+
+.subItem {
+  padding: 9px 24px 9px 48px;   /* indent */
+  font-size: 0.95em;
+  cursor: pointer;
+  color: #514b90;
+  background: #faf8ff;
+}
+.subItem:hover {
+  background: #efeaff;
+}
