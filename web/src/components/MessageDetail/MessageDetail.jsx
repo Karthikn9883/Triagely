@@ -1,11 +1,15 @@
 // src/components/MessageDetail/MessageDetail.jsx
-// (make sure you have `dompurify` installed:  `npm install dompurify`)
-// 
 import React from "react";
 import DOMPurify from "dompurify";
 import styles from "./MessageDetail.module.css";
+import AISummaryBox from "../AISummary/AISummaryBox"; // Adjust path as needed
 
-export default function MessageDetail({ message }) {
+export default function MessageDetail({
+  message,
+  aiSummary,
+  aiChecklist,
+  loadingAISummary,
+}) {
   if (!message) return null;
 
   // Format date + time:
@@ -39,15 +43,10 @@ export default function MessageDetail({ message }) {
 
       {/* ── AI Box ────────────────────────────────────────────────────────── */}
       <section className={styles.aiBox}>
-        <div className={styles.aiTitle}>AI Summary & Action Items</div>
-        {message.aiSummary && message.aiSummary.length > 0 ? (
-          <ul className={styles.checkList}>
-            {message.aiSummary.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ul>
+        {loadingAISummary ? (
+          <div>Loading summary…</div>
         ) : (
-          <em>No summary yet</em>
+          <AISummaryBox summary={aiSummary} checklist={aiChecklist} />
         )}
       </section>
 
@@ -61,7 +60,6 @@ export default function MessageDetail({ message }) {
       {message.html ? (
         <div
           className={styles.bodyHtml}
-          // sanitize before dangerously setting innerHTML
           dangerouslySetInnerHTML={{
             __html: DOMPurify.sanitize(message.html),
           }}
@@ -70,7 +68,7 @@ export default function MessageDetail({ message }) {
         <pre className={styles.bodyPlain}>{message.plain}</pre>
       )}
 
-      {/* ── Quick reply stays if you still want it ────────────────────────── */}
+      {/* ── Quick reply (optional) ────────────────────────── */}
       <div className={styles.replyRow}>
         <input placeholder="Type your response…" />
         <button>Send</button>

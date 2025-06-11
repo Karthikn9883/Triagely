@@ -1,0 +1,11 @@
+import openai
+import os
+
+openai.api_key = os.environ["OPENAI_API_KEY"]
+
+response = openai.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Say hi"}]
+)
+
+print(response)

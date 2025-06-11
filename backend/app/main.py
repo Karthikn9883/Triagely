@@ -8,6 +8,9 @@ from app.core.auth import current_user
 from app.integrations.gmail.router import router as gmail_router
 from app.integrations.slack.router import router as slack_router
 from app.background.scheduler       import poll_gmail_forever   # 👈 NEW
+from app.nlp import router as nlp_router
+
+
 
 # ───────── logging ─────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -43,6 +46,7 @@ async def protected_route(user=Depends(current_user)):
 # Routers ---------------------------------------------------------
 app.include_router(gmail_router)
 app.include_router(slack_router)
+app.include_router(nlp_router.router)
 
 # ───────── BACKGROUND POLLER – this was missing ─────────────────
 @app.on_event("startup")
