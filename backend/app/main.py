@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import the auth dependency to protect certain endpoints
 from app.core.auth import current_user
 
+# Auth router for registration and login
+from app.auth_router import router as auth_router
+
 # Bring in routers from each integration module
 from app.integrations.gmail.router import router as gmail_router
 from app.integrations.slack.router import router as slack_router
@@ -74,6 +77,8 @@ async def protected_route(user=Depends(current_user)):
 # ────────────────────
 # 4) Include feature routers
 # ────────────────────
+# Mount auth endpoints (register, login, me) under /auth
+app.include_router(auth_router)
 # Mount Gmail OAuth, callback, fetch, list endpoints under /gmail
 app.include_router(gmail_router)
 # Mount Slack OAuth endpoints under /slack

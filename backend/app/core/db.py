@@ -1,17 +1,13 @@
 # app/core/db.py
 
 """
-Low-level DynamoDB helpers for Triagely integrations.
+Low-level SQLite helpers for Triagely integrations.
 
-Defines two main tables:
+Defines three main tables:
 
-  1. triagely-oauth     → stores OAuth tokens for each user and provider
-        • Partition Key (PK):  UserID (Cognito sub)
-        • Sort Key      (SK):  provider_key (e.g., 'gmail:alice@x.com', 'slack')
-
-  2. triagely-messages  → caches email/slack messages per user
-        • PK:  UserID (Cognito sub)
-        • SK:  MessageID (unique per message/thread)
+  1. users          → stores local user accounts
+  2. oauth_tokens   → stores OAuth tokens for each user and provider
+  3. messages       → caches email/slack messages per user
 
 Provides functions to save and retrieve tokens, list all Gmail tokens,
 and put/query messages with deduplication.
@@ -20,40 +16,117 @@ from __future__ import annotations
 import os
 import time
 import json
-import boto3
+import sqlite3
 from datetime import datetime, timedelta
-from boto3.dynamodb.conditions import Key, Attr
+from contextlib import contextmanager
 
-# Initialize DynamoDB resource using AWS_REGION from environment
-REGION = os.getenv("AWS_REGION")
-ddb    = boto3.resource("dynamodb", region_name=REGION)
-# Tables: triagely-oauth, triagely-messages
-_t_oauth = ddb.Table("triagely-oauth")
-_t_msg   = ddb.Table("triagely-messages")
+# Database file path
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "triagely.db")
 
-# ───────────────────────────── OAuth rows ──────────────────────────────
+
+@contextmanager
+def get_db():
+    """
+    Context manager for database connections.
+    Ensures connections are properly closed.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # Enable dict-like row access
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+# ───────────────────────────── User management ──────────────────────────────
+
+def create_user(user_id: str, email: str, password_hash: str, name: str = None) -> None:
+    """
+    Create a new user account.
+
+    Args:
+      user_id: Unique user identifier (UUID).
+      email: User's email address (unique).
+      password_hash: Hashed password.
+      name: Optional user's full name.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users (id, email, password_hash, name, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, email, password_hash, name, int(time.time()))
+        )
+        conn.commit()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """
+    Retrieve a user by email address.
+
+    Args:
+      email: User's email address.
+
+    Returns:
+      User dict if found, otherwise None.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    """
+    Retrieve a user by ID.
+
+    Args:
+      user_id: User's unique identifier.
+
+    Returns:
+      User dict if found, otherwise None.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+# ───────────────────────────── OAuth tokens ──────────────────────────────
 
 def save_token(uid: str, provider_key: str, token: dict | str) -> None:
     """
     Persist an OAuth token for a given user and provider.
 
     Args:
-      uid: Cognito user sub (string) used as partition key.
+      uid: User ID (string) used as partition key.
       provider_key: unique key for service, e.g. 'gmail:alice@example.com' or 'slack'.
       token: OAuth token payload (dict) or raw string; if dict, will be JSON-encoded.
 
     Effect:
-      Inserts or overwrites an item in 'triagely-oauth' with a timestamp.
+      Inserts or overwrites an item in 'oauth_tokens' with a timestamp.
     """
-    item = {
-        "UserID":       uid,
-        "Provider":     provider_key,
-        # Ensure token is stored as JSON string
-        "token":        json.dumps(token) if isinstance(token, dict) else token,
-        # Record when connection happened (epoch seconds)
-        "connected_at": int(time.time()),
-    }
-    _t_oauth.put_item(Item=item)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        token_str = json.dumps(token) if isinstance(token, dict) else token
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO oauth_tokens (user_id, provider, token, connected_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (uid, provider_key, token_str, int(time.time()))
+        )
+        conn.commit()
 
 
 def get_token(uid: str, provider_key: str) -> dict | None:
@@ -61,19 +134,22 @@ def get_token(uid: str, provider_key: str) -> dict | None:
     Retrieve a stored OAuth token for a user-provider.
 
     Args:
-      uid: Cognito user sub.
+      uid: User ID.
       provider_key: provider sort key.
 
     Returns:
       Decoded token dict if found, otherwise None.
     """
-    res = _t_oauth.get_item(
-        Key={"UserID": uid, "Provider": provider_key}
-    )
-    if "Item" in res:
-        # Parse JSON back into dict
-        return json.loads(res["Item"]["token"])
-    return None
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT token FROM oauth_tokens WHERE user_id = ? AND provider = ?",
+            (uid, provider_key)
+        )
+        row = cursor.fetchone()
+        if row:
+            return json.loads(row["token"])
+        return None
 
 
 def list_gmail_tokens(uid: str) -> list[dict]:
@@ -83,69 +159,151 @@ def list_gmail_tokens(uid: str) -> list[dict]:
     Gmail provider_key entries start with 'gmail:'.
 
     Args:
-      uid: Cognito user sub.
+      uid: User ID.
 
     Returns:
-      List of DynamoDB items (dicts) with keys 'UserID', 'Provider', 'token', etc.
+      List of dicts with keys 'UserID', 'Provider', 'token', etc.
     """
-    res = _t_oauth.query(
-        KeyConditionExpression=
-            Key("UserID").eq(uid) & Key("Provider").begins_with("gmail:")
-    )
-    return res.get("Items", [])
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_id AS UserID, provider AS Provider, token, connected_at
+            FROM oauth_tokens
+            WHERE user_id = ? AND provider LIKE 'gmail:%'
+            """,
+            (uid,)
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 def all_gmail_tokens() -> list[tuple[str, str]]:
     """
     Scan and return every Gmail token entry across all users.
 
-    Note: a full table scan may be expensive at scale.
-
     Returns:
-      List of tuples: (UserID, Provider) for each Gmail row.
+      List of tuples: (user_id, provider) for each Gmail row.
     """
-    out = []
-    start_key = None
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_id, provider
+            FROM oauth_tokens
+            WHERE provider LIKE 'gmail:%'
+            """
+        )
+        rows = cursor.fetchall()
+        return [(row["user_id"], row["provider"]) for row in rows]
 
-    while True:
-        scan_args = {
-            # Only fetch keys to minimize data transfer
-            "ProjectionExpression": "UserID, Provider",
-            # Filter for Gmail provider entries
-            "FilterExpression": Key("Provider").begins_with("gmail:"),
-        }
-        if start_key:
-            scan_args["ExclusiveStartKey"] = start_key
-        page = _t_oauth.scan(**scan_args)
-        # Append tuple list
-        for item in page.get("Items", []):
-            out.append((item["UserID"], item["Provider"]))
-        start_key = page.get("LastEvaluatedKey")
-        if not start_key:
-            break
-    return out
 
 # ───────────────────────────── Messages table ──────────────────────────
 
 def put_msg(uid: str, msg_id: str, body: dict) -> None:
     """
-    Insert a message into 'triagely-messages' if not already present.
-
-    Uses a conditional put to enforce idempotency (no duplicates).
+    Insert a message into 'messages' if not already present.
 
     Args:
-      uid: Cognito user sub (partition key).
+      uid: User ID (partition key).
       msg_id: unique message/thread ID for sort key.
       body: dict of message attributes (subject, snippet, etc.).
-
-    Raises:
-      ConditionalCheckFailedException if item already exists.
     """
-    item = {"UserID": uid, "MessageID": msg_id, **body}
-    _t_msg.put_item(
-        Item=item,
-        ConditionExpression="attribute_not_exists(MessageID)",
-    )
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if message already exists
+        cursor.execute(
+            "SELECT 1 FROM messages WHERE user_id = ? AND message_id = ?",
+            (uid, msg_id)
+        )
+        if cursor.fetchone():
+            return  # Message already exists, skip insert
+
+        # Convert lists to JSON strings for storage
+        ai_summary = json.dumps(body.get("aiSummary", []))
+        ai_checklist = json.dumps(body.get("aiChecklist", []))
+
+        cursor.execute(
+            """
+            INSERT INTO messages (
+                user_id, message_id, subject, snippet, sender, sender_email,
+                date_iso, plain, html, priority, account, ai_summary, ai_checklist, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid,
+                msg_id,
+                body.get("subject"),
+                body.get("snippet"),
+                body.get("sender"),
+                body.get("senderEmail"),
+                body.get("dateISO"),
+                body.get("plain"),
+                body.get("html"),
+                body.get("priority", "Normal"),
+                body.get("account"),
+                ai_summary,
+                ai_checklist,
+                int(time.time())
+            )
+        )
+        conn.commit()
+
+
+def update_message_ai(uid: str, msg_id: str, ai_summary: list, ai_checklist: list) -> None:
+    """
+    Update AI summary and checklist for an existing message.
+
+    Args:
+      uid: User ID.
+      msg_id: Message ID.
+      ai_summary: List of summary bullet points.
+      ai_checklist: List of checklist items.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE messages
+            SET ai_summary = ?, ai_checklist = ?
+            WHERE user_id = ? AND message_id = ?
+            """,
+            (json.dumps(ai_summary), json.dumps(ai_checklist), uid, msg_id)
+        )
+        conn.commit()
+
+
+def get_message(uid: str, msg_id: str) -> dict | None:
+    """
+    Retrieve a single message by user ID and message ID.
+
+    Args:
+      uid: User ID.
+      msg_id: Message ID.
+
+    Returns:
+      Message dict if found, otherwise None.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM messages WHERE user_id = ? AND message_id = ?",
+            (uid, msg_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            msg = dict(row)
+            # Convert JSON strings back to lists
+            msg["MessageID"] = msg.pop("message_id")
+            msg["UserID"] = msg.pop("user_id")
+            msg["dateISO"] = msg.pop("date_iso")
+            msg["senderEmail"] = msg.pop("sender_email")
+            msg["aiSummary"] = json.loads(msg.pop("ai_summary") or "[]")
+            msg["aiChecklist"] = json.loads(msg.pop("ai_checklist") or "[]")
+            msg.pop("created_at", None)
+            return msg
+        return None
 
 
 def list_msgs(uid: str, limit: int = 50, page: int = 1, priority_filter: str = None) -> dict:
@@ -153,7 +311,7 @@ def list_msgs(uid: str, limit: int = 50, page: int = 1, priority_filter: str = N
     Query recent cached messages for a user with pagination support.
 
     Args:
-      uid: Cognito user sub.
+      uid: User ID.
       limit: maximum number of items to return per page.
       page: page number (1-indexed).
       priority_filter: optional priority filter ('High', 'Normal', None for all).
@@ -172,183 +330,101 @@ def list_msgs(uid: str, limit: int = 50, page: int = 1, priority_filter: str = N
     # Calculate 60 days ago timestamp for filtering
     sixty_days_ago = datetime.now() - timedelta(days=60)
     sixty_days_ago_iso = sixty_days_ago.isoformat()
-    
-    
-    
-    # Build filter expression
-    filter_expr = Attr("dateISO").gte(sixty_days_ago_iso)
-    if priority_filter:
-        filter_expr = filter_expr & Attr("priority").eq(priority_filter)
-    
-    
-    # Fetch ALL emails from the 60-day window using DynamoDB pagination
-    all_items = []
-    last_evaluated_key = None
-    max_safety_limit = 10000  # Safety limit to prevent excessive memory usage
-    
-    while len(all_items) < max_safety_limit:
-        query_args = {
-            "KeyConditionExpression": Key("UserID").eq(uid),
-            "FilterExpression": filter_expr,
-            "ScanIndexForward": False  # Get newest MessageIDs first
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = """
+            SELECT * FROM messages
+            WHERE user_id = ? AND date_iso >= ?
+        """
+        params = [uid, sixty_days_ago_iso]
+
+        if priority_filter:
+            query += " AND priority = ?"
+            params.append(priority_filter)
+
+        # Get total count
+        count_query = query.replace("SELECT *", "SELECT COUNT(*)")
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+
+        # Calculate pagination
+        total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
+        current_page = max(1, min(page, total_pages)) if total_pages > 0 else 1
+        offset = (current_page - 1) * limit
+
+        # Get paginated results
+        query += " ORDER BY date_iso DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        # Convert rows to dicts and parse JSON fields
+        items = []
+        for row in rows:
+            msg = dict(row)
+            msg["MessageID"] = msg.pop("message_id")
+            msg["UserID"] = msg.pop("user_id")
+            msg["dateISO"] = msg.pop("date_iso")
+            msg["senderEmail"] = msg.pop("sender_email")
+            msg["aiSummary"] = json.loads(msg.pop("ai_summary") or "[]")
+            msg["aiChecklist"] = json.loads(msg.pop("ai_checklist") or "[]")
+            msg.pop("created_at", None)
+            items.append(msg)
+
+        return {
+            "items": items,
+            "pagination": {
+                "current_page": current_page,
+                "total_pages": total_pages,
+                "total_count": total_count,
+                "page_size": limit
+            }
         }
-        
-        if last_evaluated_key:
-            query_args["ExclusiveStartKey"] = last_evaluated_key
-            
-        res = _t_msg.query(**query_args)
-        batch_items = res.get("Items", [])
-        all_items.extend(batch_items)
-        
-        last_evaluated_key = res.get("LastEvaluatedKey")
-        if not last_evaluated_key:
-            break
-    
-    # Sort ALL items by date in descending order (newest first)
-    all_items.sort(key=lambda x: x.get("dateISO", ""), reverse=True)
-    
-    # Recalculate pagination based on actual results
-    actual_total_count = len(all_items)
-    actual_total_pages = (actual_total_count + limit - 1) // limit if actual_total_count > 0 else 1
-    current_page = max(1, min(page, actual_total_pages)) if actual_total_pages > 0 else 1
-    
-    # Apply pagination to the sorted results
-    start_idx = (current_page - 1) * limit
-    end_idx = start_idx + limit
-    items = all_items[start_idx:end_idx]
-    
-    return {
-        "items": items,
-        "pagination": {
-            "current_page": current_page,
-            "total_pages": actual_total_pages,
-            "total_count": actual_total_count,
-            "page_size": limit
-        }
-    }
 
 
 def cleanup_old_messages() -> int:
     """
-    Remove messages older than 90 days from all users.
-    
+    Remove messages older than 60 days from all users.
+
     Returns:
         Number of messages deleted.
     """
-    # Calculate 60 days ago timestamp for filtering
     sixty_days_ago = datetime.now() - timedelta(days=60)
     sixty_days_ago_iso = sixty_days_ago.isoformat()
-    
-    deleted_count = 0
-    
-    # Scan for old messages across all users
-    try:
-        response = _t_msg.scan(
-            FilterExpression=Attr("dateISO").lt(sixty_days_ago_iso),
-            ProjectionExpression="UserID, MessageID"
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM messages WHERE date_iso < ?",
+            (sixty_days_ago_iso,)
         )
-        
-        # Batch delete old messages
-        with _t_msg.batch_writer() as batch:
-            for item in response.get("Items", []):
-                try:
-                    batch.delete_item(
-                        Key={
-                            "UserID": item["UserID"],
-                            "MessageID": item["MessageID"]
-                        }
-                    )
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"Failed to delete message {item['MessageID']}: {e}")
-        
-        # Handle pagination if there are more results
-        while 'LastEvaluatedKey' in response:
-            response = _t_msg.scan(
-                FilterExpression=Attr("dateISO").lt(sixty_days_ago_iso),
-                ProjectionExpression="UserID, MessageID",
-                ExclusiveStartKey=response['LastEvaluatedKey']
-            )
-            
-            with _t_msg.batch_writer() as batch:
-                for item in response.get("Items", []):
-                    try:
-                        batch.delete_item(
-                            Key={
-                                "UserID": item["UserID"],
-                                "MessageID": item["MessageID"]
-                            }
-                        )
-                        deleted_count += 1
-                    except Exception as e:
-                        print(f"Failed to delete message {item['MessageID']}: {e}")
-                        
-    except Exception as e:
-        print(f"Failed to cleanup old messages: {e}")
-        
-    return deleted_count
+        deleted_count = cursor.rowcount
+        conn.commit()
+        return deleted_count
 
 
 def cleanup_old_messages_for_user(user_id: str) -> int:
     """
-    Remove messages older than 90 days for a specific user.
-    
+    Remove messages older than 60 days for a specific user.
+
     Args:
-        user_id: Cognito user sub.
-        
+        user_id: User ID.
+
     Returns:
         Number of messages deleted.
     """
-    # Calculate 60 days ago timestamp for filtering
     sixty_days_ago = datetime.now() - timedelta(days=60)
     sixty_days_ago_iso = sixty_days_ago.isoformat()
-    
-    deleted_count = 0
-    
-    try:
-        response = _t_msg.query(
-            KeyConditionExpression=Key("UserID").eq(user_id),
-            FilterExpression=Attr("dateISO").lt(sixty_days_ago_iso),
-            ProjectionExpression="UserID, MessageID"
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM messages WHERE user_id = ? AND date_iso < ?",
+            (user_id, sixty_days_ago_iso)
         )
-        
-        # Batch delete old messages for this user
-        with _t_msg.batch_writer() as batch:
-            for item in response.get("Items", []):
-                try:
-                    batch.delete_item(
-                        Key={
-                            "UserID": item["UserID"],
-                            "MessageID": item["MessageID"]
-                        }
-                    )
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"Failed to delete message {item['MessageID']}: {e}")
-        
-        # Handle pagination
-        while 'LastEvaluatedKey' in response:
-            response = _t_msg.query(
-                KeyConditionExpression=Key("UserID").eq(user_id),
-                FilterExpression=Attr("dateISO").lt(sixty_days_ago_iso),
-                ProjectionExpression="UserID, MessageID",
-                ExclusiveStartKey=response['LastEvaluatedKey']
-            )
-            
-            with _t_msg.batch_writer() as batch:
-                for item in response.get("Items", []):
-                    try:
-                        batch.delete_item(
-                            Key={
-                                "UserID": item["UserID"],
-                                "MessageID": item["MessageID"]
-                            }
-                        )
-                        deleted_count += 1
-                    except Exception as e:
-                        print(f"Failed to delete message {item['MessageID']}: {e}")
-                        
-    except Exception as e:
-        print(f"Failed to cleanup old messages for user {user_id}: {e}")
-        
-    return deleted_count
+        deleted_count = cursor.rowcount
+        conn.commit()
+        return deleted_count

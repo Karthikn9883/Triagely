@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 # Import auth helper to identify the currently logged-in user
 from app.core.auth import current_user
 
-# Import DynamoDB wrapper from app.core.db (ddb is a Boto3 resource)
-from app.core.db import ddb
+# Import database helpers for message access
+from app.core.db import get_message, update_message_ai
 
 # Import our LLM-powered utility functions for summaries, checklists, and priority
 from .llm.summary   import summarise_thread
@@ -22,9 +22,9 @@ router = APIRouter(prefix="/nlp", tags=["nlp"])
 @router.post("/summaries/{thread_id}")
 def create_summary(thread_id: str, user=Depends(current_user)):
     """
-    1) Look up an existing summary/checklist/priority in DynamoDB.
+    1) Look up an existing summary/checklist/priority in database.
     2) If found, return the cached version immediately.
-    3) Otherwise, generate each via LLM once, persist back to DynamoDB,
+    3) Otherwise, generate each via LLM once, persist back to database,
        and then return the newly created values.
 
     Parameters:
@@ -39,21 +39,14 @@ def create_summary(thread_id: str, user=Depends(current_user)):
       "priority": "High" | "Normal"
     }
     """
-    # Extract the cognito user ID (sub) for multi-tenant isolation
+    # Extract the user ID (sub) for multi-tenant isolation
     user_id = user["sub"]
 
-    # Reference to our DynamoDB table where we store messages and AI metadata
-    table = ddb.Table("triagely-messages")
-
-    # Primary key for this item: partition=UserID, sort=MessageID
-    key = {"UserID": user_id, "MessageID": thread_id}
-
-    # 1️⃣ Attempt to read the existing item from DynamoDB
-    resp = table.get_item(Key=key)
-    item = resp.get("Item", {})  # default to empty dict if no Item
+    # 1️⃣ Attempt to read the existing item from database
+    item = get_message(user_id, thread_id)
 
     # If both aiSummary and aiChecklist are non-empty, we assume this is already processed
-    if item.get("aiSummary") and item.get("aiChecklist"):
+    if item and item.get("aiSummary") and item.get("aiChecklist"):
         # Return the cached values, including any previously stored priority
         return {
             "thread_id": thread_id,
@@ -78,17 +71,9 @@ def create_summary(thread_id: str, user=Depends(current_user)):
     prio_res = classify_priority(user_id, thread_id)
     priority = prio_res.get("priority", "Normal")
 
-    # 3️⃣ Persist the newly generated metadata back into DynamoDB
+    # 3️⃣ Persist the newly generated metadata back into database
     #    so we never re-run the LLM for this message again
-    table.update_item(
-        Key=key,
-        UpdateExpression="SET aiSummary = :s, aiChecklist = :c, priority = :p",
-        ExpressionAttributeValues={
-            ":s": summary,
-            ":c": checklist,
-            ":p": priority,
-        },
-    )
+    update_message_ai(user_id, thread_id, summary, checklist)
 
     # Finally, return the freshly generated data
     return {

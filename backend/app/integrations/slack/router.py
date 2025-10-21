@@ -6,13 +6,12 @@ from urllib.parse import urlencode
 
 from app.core.auth    import current_user
 from app.core.db      import save_token
-from app.core.secrets import get as get_secret
 
 router = APIRouter(prefix="/slack", tags=["slack"])
 
-SECRET        = get_secret("slack-oauth")
-CLIENT_ID     = SECRET["client_id"]
-CLIENT_SECRET = SECRET["client_secret"]
+# Load Slack OAuth credentials from environment variables
+CLIENT_ID     = os.getenv("SLACK_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 SCOPES        = os.getenv("SLACK_SCOPES", "").split(",")
 REDIRECT_URL  = os.getenv("SLACK_REDIRECT_URL")
 FRONTEND_URL  = os.getenv("FRONTEND_URL")

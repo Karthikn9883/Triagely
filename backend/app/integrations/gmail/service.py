@@ -23,23 +23,18 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, List
 
-import boto3
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# DynamoDB helpers: create message rows and list OAuth tokens
-from app.core.db import put_msg, list_gmail_tokens
+# Database helpers: create message rows, list OAuth tokens, get/save tokens
+from app.core.db import put_msg, list_gmail_tokens, get_token, save_token, get_message, update_message_ai
 # LLM support: provider call and prompt template for priority
 from app.nlp.llm.provider import call, LLMRequest
 from app.nlp.llm.priority import SYSTEM_PROMPT
 # AI processing functions for summary and checklist
 from app.nlp.llm.summary import summarise_thread
 from app.nlp.llm.checklist import extract_checklist
-
-# Initialize DynamoDB resources
-dynamodb  = boto3.resource("dynamodb", region_name=os.getenv("AWS_REGION"))
-tbl_oauth = dynamodb.Table("triagely-oauth")
 
 # Regex to detect and restore URL-safe base64 padding
 B64PAD = lambda s: s + "=" * (4 - len(s) % 4)
@@ -49,10 +44,10 @@ def _get_creds(row: dict) -> Credentials:
     """
     Build Google Credentials from stored token JSON.
     • Refresh access_token if expired (and refresh_token present).
-    • Persist renewed access_token back to triagely-oauth table.
+    • Persist renewed access_token back to oauth_tokens table.
 
     Args:
-      row: DynamoDB row dict containing 'token' JSON string.
+      row: Database row dict containing 'token' JSON string.
 
     Returns:
       A google.oauth2.credentials.Credentials instance, ready to use.
@@ -69,12 +64,8 @@ def _get_creds(row: dict) -> Credentials:
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())  # Fetch new access_token
         tok["access_token"] = creds.token  # Update cached token JSON
-        # Persist refresh to DynamoDB
-        tbl_oauth.update_item(
-            Key={"UserID": row["UserID"], "Provider": row["Provider"]},
-            UpdateExpression="SET token = :t",
-            ExpressionAttributeValues={":t": json.dumps(tok)},
-        )
+        # Persist refresh to database
+        save_token(row["UserID"], row["Provider"], tok)
     return creds
 
 
@@ -118,6 +109,7 @@ def fetch_for_user(
     *,
     max_threads: int = 40,
     full_sync: bool = False,
+    limit_emails: int | None = None,
 ) -> int:
     """
     Polls Gmail for new threads and caches them with LLM-prioritized metadata.
@@ -127,7 +119,7 @@ def fetch_for_user(
       2) List threads from Gmail with date-based query
       3) For each thread not already in DynamoDB:
          a) Fetch full thread, extract headers and bodies
-         b) Compute a snippet (plain first 120 chars fallback)  
+         b) Compute a snippet (plain first 120 chars fallback)
          c) Run LLM on plain text to decide 'High' vs 'Normal'
          d) Construct DynamoDB item including priority & account
          e) Insert via put_msg (idempotent by MessageID)
@@ -137,15 +129,17 @@ def fetch_for_user(
       provider_key: Optional sort-key for a specific gmail:<address>
       max_threads: maxResults parameter for Gmail API (ignored if full_sync=True)
       full_sync: if True, fetch all emails from past 90 days with pagination
+      limit_emails: if set, only fetch this many latest emails (useful for initial sync)
 
     Returns:
       Number of new threads inserted into DynamoDB.
     """
     # Choose tokens based on provider_key or all Gmail tokens
     if provider_key:
-        token_rows = [
-            tbl_oauth.get_item(Key={"UserID": user_id, "Provider": provider_key})["Item"]
-        ]
+        tok = get_token(user_id, provider_key)
+        if not tok:
+            return 0
+        token_rows = [{"UserID": user_id, "Provider": provider_key, "token": json.dumps(tok)}]
     else:
         token_rows = list_gmail_tokens(user_id)
 
@@ -156,7 +150,11 @@ def fetch_for_user(
         svc     = build("gmail", "v1", credentials=creds, cache_discovery=False)
 
         # 1) Determine query based on sync type
-        if full_sync:
+        if limit_emails:
+            # Limited sync: fetch only N latest emails
+            query = "newer_than:60d"
+            new_rows += _fetch_single_batch(svc, user_id, address, query, limit_emails)
+        elif full_sync:
             query = "newer_than:60d"
             new_rows += _fetch_with_pagination(svc, user_id, address, query)
         else:
@@ -164,6 +162,53 @@ def fetch_for_user(
             new_rows += _fetch_single_batch(svc, user_id, address, query, max_threads)
 
     return new_rows
+
+
+def process_first_emails_with_ai(user_id: str, count: int = 3) -> int:
+    """
+    Process the first N most recent emails with AI (summary, checklist, priority).
+    This is called after initial sync to process only the most recent emails.
+
+    Args:
+      user_id: User ID to process emails for
+      count: Number of most recent emails to process with AI
+
+    Returns:
+      Number of emails processed with AI
+    """
+    from app.core.db import list_msgs
+
+    # Get the most recent emails
+    result = list_msgs(user_id, limit=count, page=1)
+    emails = result["items"]
+
+    processed = 0
+    for email in emails:
+        msg_key = email["MessageID"]
+
+        # Skip if already processed (has AI summary)
+        if email.get("aiSummary") and len(email.get("aiSummary", [])) > 0:
+            continue
+
+        try:
+            # Generate AI summary
+            sum_res = summarise_thread(user_id, msg_key)
+            ai_summary = sum_res.get("summary", [])
+
+            # Generate AI checklist
+            chk_res = extract_checklist(user_id, msg_key)
+            raw_items = chk_res.get("checklist", [])
+            ai_checklist = [{"text": line, "checked": False} for line in raw_items]
+
+            # Update the message with AI results
+            update_message_ai(user_id, msg_key, ai_summary, ai_checklist)
+            print(f"[gmail] AI processing completed for {msg_key}")
+            processed += 1
+
+        except Exception as ai_error:
+            print(f"[gmail] AI processing failed for {msg_key}: {ai_error}")
+
+    return processed
 
 
 def _fetch_single_batch(svc, user_id: str, address: str, query: str, max_results: int) -> int:
@@ -224,17 +269,16 @@ def _fetch_with_pagination(svc, user_id: str, address: str, query: str) -> int:
 
 def _process_threads(svc, user_id: str, address: str, threads: list) -> int:
     """
-    Process a list of threads and store new ones to DynamoDB.
+    Process a list of threads and store new ones to database.
     """
     new_rows = 0
-    table = dynamodb.Table("triagely-messages")
-    
+
     for th in threads:
         tid = th["id"]
         msg_key = f"gmail-{address}-{tid}"
 
         # Skip if already present
-        if table.get_item(Key={"UserID": user_id, "MessageID": msg_key}).get("Item"):
+        if get_message(user_id, msg_key):
             continue
 
         # Fetch full thread for details
@@ -293,42 +337,15 @@ def _process_threads(svc, user_id: str, address: str, threads: list) -> int:
             "aiChecklist": [],
         }
 
-        # Write to DynamoDB and count
+        # Write to database and count
         try:
             put_msg(user_id, msg_key, body)
             new_rows += 1
-            
-            # Generate AI summary and checklist after successful storage
-            try:
-                # Generate AI summary
-                sum_res = summarise_thread(user_id, msg_key)
-                ai_summary = sum_res.get("summary", [])
-                
-                # Generate AI checklist  
-                chk_res = extract_checklist(user_id, msg_key)
-                raw_items = chk_res.get("checklist", [])
-                ai_checklist = [{"text": line, "checked": False} for line in raw_items]
-                
-                # Update the message with AI results
-                table = dynamodb.Table("triagely-messages")
-                table.update_item(
-                    Key={"UserID": user_id, "MessageID": msg_key},
-                    UpdateExpression="SET aiSummary = :s, aiChecklist = :c",
-                    ExpressionAttributeValues={
-                        ":s": ai_summary,
-                        ":c": ai_checklist,
-                    },
-                )
-                print(f"[gmail] AI processing completed for {msg_key}")
-                
-            except Exception as ai_error:
-                print(f"[gmail] AI processing failed for {msg_key}: {ai_error}")
-                # Continue without AI processing - email is still stored
-                
+            print(f"[gmail] Stored message {msg_key} (AI processing will be done on-demand)")
         except Exception as e:
             print(f"[gmail] failed to store message {msg_key}: {e}")
-        
+
         # Minimal delay to prevent overwhelming APIs during bulk processing
-        time.sleep(0.1)  # Increased to 0.1s due to additional AI processing
+        time.sleep(0.05)  # Small delay for rate limiting
             
     return new_rows

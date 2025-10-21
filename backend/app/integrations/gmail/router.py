@@ -24,8 +24,6 @@ from app.core.db import (
     save_token,
     list_gmail_tokens,
 )
-# Secret manager helper to retrieve OAuth client credentials
-from app.core.secrets import get as get_secret
 # Service layer for fetching and syncing messages
 from . import service
 # Pydantic schema for serializing message list responses
@@ -35,8 +33,9 @@ from .schemas import GmailMessage
 router = APIRouter(prefix="/gmail", tags=["gmail"])
 
 # ───────────────────────── configuration ─────────────────────────
-# Load OAuth client ID/secret from AWS Secrets Manager
-SECRET = get_secret("gmail-oauth")
+# Load OAuth client ID/secret from environment variables
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
 # Scopes to request from Google; defaults to readonly
 SCOPES = os.getenv(
     "GMAIL_SCOPES", "https://www.googleapis.com/auth/gmail.readonly"
@@ -70,8 +69,8 @@ def _flow(state: str | None):
     return Flow.from_client_config(
         {
             "web": {
-                "client_id":     SECRET["client_id"],
-                "client_secret": SECRET["client_secret"],
+                "client_id":     GMAIL_CLIENT_ID,
+                "client_secret": GMAIL_CLIENT_SECRET,
                 "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
                 "token_uri":     "https://oauth2.googleapis.com/token",
                 "redirect_uris": [REDIRECT_URI],
@@ -134,7 +133,7 @@ async def callback(request: Request, state: str = "", code: str = ""):
 
     provider_key = f"gmail:{email_addr}" if email_addr else "gmail"
 
-    # Persist token JSON in triagely-oauth table for this user & provider
+    # Persist token JSON in oauth_tokens table for this user & provider
     save_token(
         state,
         provider_key,
@@ -143,15 +142,18 @@ async def callback(request: Request, state: str = "", code: str = ""):
             "access_token":  creds.token,
             "expires_at":    int(creds.expiry.timestamp()),
             "token_uri":     creds.token_uri,
-            "client_id":     SECRET["client_id"],
-            "client_secret": SECRET["client_secret"],
+            "client_id":     GMAIL_CLIENT_ID,
+            "client_secret": GMAIL_CLIENT_SECRET,
             "scopes":        creds.scopes,
             "email":         email_addr,
         },
     )
 
-    # Immediately fetch and cache ALL threads from past 90 days for this new account
+    # Immediately fetch all emails from past 60 days (but don't process with AI yet)
     service.fetch_for_user(state, full_sync=True)
+
+    # Process only the first 3 most recent emails with AI to save API costs
+    service.process_first_emails_with_ai(state, count=3)
 
     # Redirect the browser back to the React front-end
     fe = os.getenv("FRONTEND_URL", "http://localhost:3000")

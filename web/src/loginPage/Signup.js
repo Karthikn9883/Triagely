@@ -9,9 +9,10 @@ export default function Signup({ onSignup, switchToLogin }) {
 
   const handleSubmit = async e => {
     e.preventDefault();
+    setMsg("Creating your account...");
     try {
       await onSignup(email, pw, name);
-      setMsg("Signup success! Check your email for the code.");
+      // User is now auto-logged in, no message needed as App will redirect
     } catch (e) {
       setMsg(e.message);
     }

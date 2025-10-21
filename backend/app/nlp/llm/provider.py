@@ -13,8 +13,6 @@ Key components:
 
 import os
 import json
-import boto3
-import httpx
 from pydantic import BaseModel
 
 
@@ -91,40 +89,20 @@ def _bedrock_call(req: LLMRequest) -> str:
     """
     Invoke an AWS Bedrock model for inference.
 
-    Steps:
-      1) Create a Bedrock Runtime client in the configured region.
-      2) Wrap the prompt, max_tokens, and temperature into a JSON payload.
-      3) Call invoke_model with the given modelId from BEDROCK_MODEL.
-      4) Parse and return the textual completion from the response body.
+    NOTE: Bedrock support removed in local migration.
+    Use OpenAI provider instead by setting AI_PROVIDER=openai.
 
     Args:
         req (LLMRequest): The prompt and generation settings.
     Returns:
         str: The completion string.
+    Raises:
+        NotImplementedError: Bedrock is not supported in local mode.
     """
-    # Create Bedrock runtime client (default region or env var AWS_REGION)
-    brt = boto3.client(
-        "bedrock-runtime",
-        region_name=os.getenv("AWS_REGION", "us-east-1")
+    raise NotImplementedError(
+        "AWS Bedrock is not supported in local mode. "
+        "Please use AI_PROVIDER=openai instead."
     )
-    # Prepare the JSON body for the request
-    body = json.dumps({
-        "prompt": req.prompt,
-        "max_tokens": req.max_tokens,
-        "temperature": req.temperature,
-    })
-    # Call the Bedrock model; modelId from env var or fallback
-    resp = brt.invoke_model(
-        modelId=os.getenv(
-            "BEDROCK_MODEL",
-            "anthropic.claude-3-sonnet-20240229-v1:0"
-        ),
-        body=body,
-        contentType="application/json",
-    )
-    # The response body is a stream; parse and extract the completion field
-    result = json.loads(resp["body"].read())
-    return result.get("completion", "")
 
 
 def call(req: LLMRequest) -> str:

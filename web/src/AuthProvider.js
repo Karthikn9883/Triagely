@@ -1,72 +1,134 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { Amplify, Auth } from "aws-amplify";
-import awsConfig from "./aws-exports";
-
-Amplify.configure(awsConfig);
 
 const AuthContext = createContext();
+
+// API base URL from environment variable
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:8000";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   /* ─────────────────────────────────────────────
-     1️⃣  On page load, find existing Cognito user
+     1️⃣  On page load, check if we have a token and validate it
   ────────────────────────────────────────────────*/
   useEffect(() => {
-    Auth.currentAuthenticatedUser()
-      .then(cogUser => {
-        if (!cogUser) return setUser(null);
-        /* ← ✅ Inject a username prop. */
-        const uName =
-          cogUser.attributes?.name ||
-          cogUser.attributes?.preferred_username ||
-          cogUser.username ||
-          cogUser.attributes?.email?.split("@")[0];
-        setUser({ ...cogUser, username: uName });
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    // Verify token by calling /auth/me
+    fetch(`${API_BASE_URL}/auth/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Invalid token");
+        return res.json();
       })
-      .catch(() => setUser(null))
+      .then((userData) => {
+        setUser({
+          ...userData,
+          token,
+        });
+      })
+      .catch(() => {
+        // Invalid token, remove it
+        localStorage.removeItem("access_token");
+        setUser(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 
   /* ─────────────────────────────────────────────
-     The sign-up / confirm helpers are unchanged
+     2️⃣  Sign up - Register a new user
   ────────────────────────────────────────────────*/
   const signUp = async (email, password, name) => {
-    await Auth.signUp({
-      username: email,
-      password,
-      attributes: { email, name },   // you already capture “name”
+    const response = await fetch(`${API_BASE_URL}/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password, name }),
     });
-  };
 
-  const confirmSignUp = async (email, code) => {
-    await Auth.confirmSignUp(email, code);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Registration failed");
+    }
+
+    const data = await response.json();
+
+    // Store token and set user
+    localStorage.setItem("access_token", data.access_token);
+    setUser({
+      user_id: data.user_id,
+      email: data.email,
+      name: data.name,
+      username: data.name || data.email.split("@")[0],
+      token: data.access_token,
+    });
+
+    return data;
   };
 
   /* ─────────────────────────────────────────────
-     2️⃣  On sign-in, attach the username again
+     3️⃣  Confirmation - No longer needed for local auth
+         (kept for compatibility)
   ────────────────────────────────────────────────*/
-  const signIn = async (email, password) => {
-    const cogUser = await Auth.signIn(email, password);
-    const uName =
-      cogUser.attributes?.name ||
-      cogUser.attributes?.preferred_username ||
-      cogUser.username ||
-      cogUser.attributes?.email?.split("@")[0];
-    setUser({ ...cogUser, username: uName });   /* ← ✅ */
-    return cogUser;
+  const confirmSignUp = async (email, code) => {
+    // No-op for local auth - registration is immediate
+    return Promise.resolve();
   };
 
+  /* ─────────────────────────────────────────────
+     4️⃣  Sign in - Login to existing account
+  ────────────────────────────────────────────────*/
+  const signIn = async (email, password) => {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Login failed");
+    }
+
+    const data = await response.json();
+
+    // Store token and set user
+    localStorage.setItem("access_token", data.access_token);
+    setUser({
+      user_id: data.user_id,
+      email: data.email,
+      name: data.name,
+      username: data.name || data.email.split("@")[0],
+      token: data.access_token,
+    });
+
+    return data;
+  };
+
+  /* ─────────────────────────────────────────────
+     5️⃣  Sign out
+  ────────────────────────────────────────────────*/
   const signOut = async () => {
-    await Auth.signOut();
+    localStorage.removeItem("access_token");
     setUser(null);
   };
 
+  /* ─────────────────────────────────────────────
+     6️⃣  Get ID Token - Returns the JWT token for API calls
+  ────────────────────────────────────────────────*/
   const getIdToken = async () => {
-    if (!user) return null;
-    const session = await Auth.currentSession();
-    return session.getIdToken().getJwtToken();
+    return localStorage.getItem("access_token");
   };
 
   return (
