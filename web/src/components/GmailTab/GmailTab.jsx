@@ -1,73 +1,148 @@
 // src/components/GmailTab/GmailTab.jsx
+
 import React, { useEffect, useState, useCallback } from "react";
 import axios from "axios";
 import { useAuth } from "../../AuthProvider";
+import Pagination from "../Pagination/Pagination";
 import styles from "./GmailTab.module.css";
+import { FaSpinner } from "react-icons/fa";
 
-const fmtDate = (iso) =>
-  new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const API = process.env.REACT_APP_API_BASE_URL;
 
 export default function GmailTab({ selected, setSelected }) {
   const { getIdToken } = useAuth();
 
-  const [msgs, setMsgs]   = useState([]);
-  const [loading, setLoad] = useState(true);
-  const [error, setErr]    = useState("");
+  const [msgs, setMsgs]             = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError]           = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    current_page: 1,
+    total_pages: 1,
+    total_count: 0,
+    page_size: 50
+  });
 
-  const fetchMessages = useCallback(async () => {
+  const fetchMessages = useCallback(async (pageNum = 1) => {
+    setLoading(true);
+    setError("");
     try {
-      setLoad(true);
-      setErr("");
-      const tk = await getIdToken();
-      const res = await axios.get(`${process.env.REACT_APP_API_BASE_URL}/gmail/messages`, {
-        headers: { Authorization: `Bearer ${tk}` },
+      const token = await getIdToken();
+      const res   = await axios.get(`${API}/gmail/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { page: pageNum, limit: 50 }
       });
-      setMsgs(res.data);
-      if (!selected && res.data.length) {
-        setSelected(res.data[0]);
+      setMsgs(res.data.data || []);
+      setPagination(res.data.pagination || pagination);
+      
+      // Debug logging for pagination
+      console.log("Gmail API Response:", res.data);
+      console.log("Pagination data:", res.data.pagination);
+      console.log("Messages count:", res.data.data?.length);
+      
+      // Only auto-select first message if no message is currently selected
+      if (!selected && res.data.data && res.data.data.length > 0) {
+        setSelected(res.data.data[0]);
       }
     } catch (e) {
-      console.error("Failed to fetch Gmail messages:", e);
-      setErr(e.response?.data?.detail || e.message || "Fetch failed");
+      console.error("Failed to load messages:", e);
+      setError("Failed to load messages");
     } finally {
-      setLoad(false);
+      setLoading(false);
     }
-  }, [getIdToken, selected, setSelected]);
+  }, [getIdToken]);
 
-  // Initial load
   useEffect(() => {
-    fetchMessages();
-  }, [fetchMessages]);
+    fetchMessages(currentPage);
+  }, [fetchMessages, currentPage]);
+
+  const handlePageChange = (newPage) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setError("");
+    try {
+      const token = await getIdToken();
+      // 1️⃣ push new into DB
+      await axios.post(
+        `${API}/gmail/fetch`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      // 2️⃣ reload current page
+      await fetchMessages(currentPage);
+    } catch (e) {
+      console.error("Refresh failed:", e);
+      setError("Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading) return <div className={styles.placeholder}>Loading Gmail…</div>;
   if (error)   return <div className={styles.error}>⚠ {error}</div>;
 
   return (
-    <div>
+    <div className={styles.container}>
       <div className={styles.toolbar}>
-        <button onClick={fetchMessages} className={styles.refreshBtn}>
-          Refresh
+        <div className={styles.messageCount}>
+          Showing {((pagination.current_page - 1) * pagination.page_size) + 1}-{Math.min(pagination.current_page * pagination.page_size, pagination.total_count)} of {pagination.total_count} messages
+        </div>
+        <button
+          onClick={handleRefresh}
+          className={styles.refreshBtn}
+          disabled={refreshing}
+        >
+          {refreshing ? <FaSpinner className={styles.spinner} /> : "Refresh"}
         </button>
       </div>
+
       <ul className={styles.list}>
         {msgs.map((m) => (
           <li
             key={m.MessageID}
-            className={selected?.MessageID === m.MessageID ? styles.rowSel : styles.row}
+            className={
+              selected?.MessageID === m.MessageID
+                ? styles.rowSel
+                : styles.row
+            }
             onClick={() => setSelected(m)}
           >
             <div className={styles.cellLeft}>
-              <div className={styles.sender}>{m.sender.replace(/<.*/, "")}</div>
+              <div className={styles.sender}>
+                {m.sender.replace(/<.*/, "")}
+              </div>
+
               <div className={styles.preview}>
-                {m.urgent && <span className={styles.urgentChip}>🚩 Urgent</span>}
+                  {/* Priority chip */}
+{m.priority === "High" && (
+  <span className={styles.priorityChip}>High</span>
+)}
                 {m.subject || "(No subject)"}
               </div>
+
               <div className={styles.snip}>{m.snippet}</div>
             </div>
-            <div className={styles.date}>{fmtDate(m.dateISO)}</div>
+
+            {/* date on the right */}
+            <div className={styles.date}>
+              {new Date(m.dateISO).toLocaleDateString(undefined, {
+                month: "short",
+                day:   "numeric",
+              })}
+            </div>
           </li>
         ))}
       </ul>
+
+      <Pagination
+        currentPage={pagination.current_page}
+        totalPages={pagination.total_pages}
+        onPageChange={handlePageChange}
+      />
     </div>
   );
 }

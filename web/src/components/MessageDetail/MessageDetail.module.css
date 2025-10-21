@@ -1,40 +1,85 @@
 .root   { padding: 24px 32px 60px 32px; overflow-y: auto; }
 
 .head   { display: flex; align-items: center; gap: 10px; }
-.head h1{
-  font-size: 1.35rem; font-weight: 700; margin: 0; color: #131327;
+.head h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 0;
+  color: #131327;
 }
-.pill   {
-  background: #f3e8ff; color: #a054ff; font-weight: 600;
-  font-size: .78rem; padding: 3px 8px; border-radius: 6px;
+.pill {
+  background: #f3e8ff;
+  color: #a054ff;
+  font-weight: 600;
+  font-size: .78rem;
+  padding: 3px 8px;
+  border-radius: 6px;
 }
-.date   { margin-left: auto; color: #999; font-size: .85rem; }
+.date {
+  margin-left: auto;
+  color: #999;
+  font-size: .85rem;
+}
 
-.aiBox  {
-  background: #f6f1ff; border-radius: 12px; padding: 18px 22px;
-  margin: 18px 0 26px 0; box-shadow: 0 2px 8px rgba(166,136,255,.14);
+.aiBox {
+  background: #f6f1ff;
+  border-radius: 12px;
+  padding: 18px 22px;
+  margin: 18px 0 26px 0;
+  box-shadow: 0 2px 8px rgba(166,136,255,.14);
 }
 .aiTitle { font-weight: 700; color: #7a3cff; margin-bottom: 6px; }
-.checkList{ margin: 6px 0 0 0; padding-left: 18px; }
+.checkList { margin: 6px 0 0 0; padding-left: 18px; }
 
 .senderLine { font-weight: 600; color: #3746d0; margin-bottom: 10px; }
 
 .bodyPlain {
-  background: #fafafa; border-radius: 8px; padding: 14px;
-  white-space: pre-wrap; font-family: var(--font-family, system-ui);
+  background: #fafafa;
+  border-radius: 8px;
+  padding: 14px;
+  white-space: pre-wrap;
+  font-family: var(--font-family, system-ui);
   line-height: 1.45;
 }
-.bodyHtml  { max-width: 720px; }
+.bodyHtml { max-width: 720px; }
 
 .replyRow {
-  display: flex; gap: 10px; margin-top: 22px;
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
 }
-.replyRow input{
-  flex: 1; padding: 11px 12px; border: 1px solid #ddd; border-radius: 8px;
+.replyRow input {
+  flex: 1;
+  padding: 11px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
   font-size: .95rem;
 }
-.replyRow button{
-  background: #7a3cff; color: #fff; border: none; border-radius: 8px;
-  padding: 11px 24px; font-weight: 600; cursor: pointer;
+.replyRow button {
+  background: #7a3cff;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 24px;
+  font-weight: 600;
+  cursor: pointer;
 }
-.replyRow button:hover{ background: #5b29e8; }
+.replyRow button:hover { background: #5b29e8; }
+
+/* ── NEW PRIORITY BADGES ───────────────────────────────────────── */
+.highPrio {
+  background: #ff4d4f;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+.normalPrio {
+  background: #ddd;
+  color: #555;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: 8px;
+}

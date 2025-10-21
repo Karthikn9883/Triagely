@@ -1,69 +1,89 @@
-// src/pages/Home.jsx
 import React, { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar/Sidebar";
 import GmailTab from "../components/GmailTab/GmailTab";
+import PriorityTab from "../components/PriorityTab/PriorityTab";
 import MessageDetail from "../components/MessageDetail/MessageDetail";
 import { useAuth } from "../AuthProvider";
 import styles from "./Home.module.css";
 
+const API = process.env.REACT_APP_API_BASE_URL;
+
 export default function Home() {
   const { signOut, user, getIdToken } = useAuth();
   const [sidebarTab, setSidebarTab] = useState("Priority");
-  const [selected, setSelected]     = useState(null);
+  const [selected, setSelected] = useState(null);
 
-  // For AI summary/checklist
+  // AI summary, checklist, and priority
   const [aiSummary, setAISummary] = useState("");
   const [aiChecklist, setAIChecklist] = useState([]);
+  const [priority, setPriority] = useState("");
   const [loadingSummary, setLoadingSummary] = useState(false);
 
-  // Clear selection when tab changes
+  // Clear state when the tab changes
   useEffect(() => {
     setSelected(null);
     setAISummary("");
     setAIChecklist([]);
+    setPriority("");
     setLoadingSummary(false);
   }, [sidebarTab]);
 
-  // Fetch AI summary for the selected message
+  // Whenever a message is selected, fetch summary+checklist AND priority
   useEffect(() => {
-    if (
-      selected &&
-      selected.MessageID // Make sure this matches your backend field
-    ) {
+    if (selected?.MessageID) {
       setLoadingSummary(true);
       (async () => {
         try {
           const token = await getIdToken();
-          // POST to backend to trigger/fetch summary
-          const res = await fetch(
-            `${process.env.REACT_APP_API_BASE_URL}/nlp/summaries/${encodeURIComponent(selected.MessageID)}`,
+
+          // 1️⃣ Fetch summary + checklist
+          const sumRes = await fetch(
+            `${API}/nlp/summaries/${encodeURIComponent(selected.MessageID)}`,
             {
               method: "POST",
               headers: {
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({}), // Some backends need a body for POST
+              body: JSON.stringify({}),
             }
           );
-          const data = await res.json();
-          setAISummary(data.summary || "");
-          setAIChecklist(data.checklist || []);
-        } catch (e) {
+          const sumData = await sumRes.json();
+          setAISummary(sumData.summary || "");
+          setAIChecklist(sumData.checklist || []);
+
+          // 2️⃣ Fetch priority
+          const prioRes = await fetch(
+            `${API}/nlp/priority/${encodeURIComponent(selected.MessageID)}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+          const prioData = await prioRes.json();
+          setPriority(prioData.priority || "");
+        } catch (error) {
+          console.error("Error fetching AI data:", error);
           setAISummary("AI summary could not be fetched.");
           setAIChecklist([]);
+          setPriority("");
         } finally {
           setLoadingSummary(false);
         }
       })();
     } else {
+      // Reset if nothing is selected
       setAISummary("");
       setAIChecklist([]);
+      setPriority("");
       setLoadingSummary(false);
     }
   }, [selected, getIdToken]);
 
-  // Post-OAuth hook (unchanged)
+  // Post-OAuth redirect handler (unchanged)
   useEffect(() => {
     const p = new URLSearchParams(window.location.search).get("provider");
     if (p) {
@@ -87,13 +107,12 @@ export default function Home() {
           {sidebarTab === "Priority" ? "Priority Inbox" : sidebarTab}
         </h2>
 
-        {sidebarTab === "Gmail" ? (
+        {sidebarTab === "Priority" ? (
+          <PriorityTab selected={selected} setSelected={setSelected} />
+        ) : sidebarTab === "Gmail" ? (
           <GmailTab selected={selected} setSelected={setSelected} />
         ) : (
-          <div className={styles.placeholder}>
-            {/* you can render your other tabs here */}
-            Select a tab
-          </div>
+          <div className={styles.placeholder}>Select a tab</div>
         )}
       </main>
 
@@ -103,6 +122,7 @@ export default function Home() {
             message={selected}
             aiSummary={aiSummary}
             aiChecklist={aiChecklist}
+            priority={priority}
             loadingAISummary={loadingSummary}
           />
         ) : (
